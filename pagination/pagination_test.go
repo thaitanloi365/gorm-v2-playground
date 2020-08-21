@@ -65,20 +65,9 @@ func TestCount(t *testing.T) {
 	// 	fmt.Println(string(data))
 	// }()
 
-	// func() {
-	// 	var users []*User
-	// 	var result = New(db.Where("email = ?", "user_8@test.com")).Page(1).Limit(2).Paginate(&users)
-
-	// 	data, err := json.MarshalIndent(result, "", "    ")
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// 	fmt.Println(string(data))
-	// }()
-
 	func() {
 		var users []*User
-		var result = New(db).WithRawSQL(db.Raw("SELECT * FROM users WHERE email = ?", "user_8@test.com")).Page(1).Limit(2).Paginate(&users)
+		var result = New(db.Where("email = ?", "user_8@test.com")).Order("created_at DESC").Page(11).Limit(2).Paginate(&users)
 
 		data, err := json.MarshalIndent(result, "", "    ")
 		if err != nil {
@@ -86,6 +75,17 @@ func TestCount(t *testing.T) {
 		}
 		fmt.Println(string(data))
 	}()
+
+	// func() {
+	// 	var users []*User
+	// 	var result = New(db).WithRawSQL(db.Raw("SELECT * FROM users WHERE email = ?", "user_8@test.com")).Page(1).Limit(2).Order("created_at DESC").Paginate(&users)
+
+	// 	data, err := json.MarshalIndent(result, "", "    ")
+	// 	if err != nil {
+	// 		panic(err)
+	// 	}
+	// 	fmt.Println(string(data))
+	// }()
 
 	// func() {
 	// 	var users []*User

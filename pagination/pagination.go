@@ -3,6 +3,7 @@ package pagination
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -12,6 +13,7 @@ func New(db *gorm.DB) Builder {
 	return &builder{
 		db:              db,
 		skipLimitOffset: false,
+		orderBy:         []interface{}{},
 	}
 }
 
@@ -22,6 +24,11 @@ func (b *builder) Limit(limit int) Builder {
 
 func (b *builder) Page(page int) Builder {
 	b.page = page
+	return b
+}
+
+func (b *builder) Order(orderBy interface{}) Builder {
+	b.orderBy = append(b.orderBy, orderBy)
 	return b
 }
 
@@ -69,6 +76,11 @@ func (b *builder) Paginate(result interface{}) *Pagination {
 	if b.rawSQL == nil {
 		var session = b.db.Session(&gorm.Session{PrepareStmt: true})
 		if b.skipLimitOffset == false {
+			if len(b.orderBy) > 0 {
+				for _, o := range b.orderBy {
+					session = session.Order(o)
+				}
+			}
 			if b.limit > 0 {
 				session = session.Limit(b.limit)
 			}
@@ -83,6 +95,16 @@ func (b *builder) Paginate(result interface{}) *Pagination {
 		var vars = b.rawSQL.Statement.Vars
 		var rawSQL = sqlString
 		if b.skipLimitOffset == false {
+			if len(b.orderBy) > 0 {
+				var orderByString = []string{}
+				for _, orderBy := range b.orderBy {
+					if v, ok := orderBy.(string); ok {
+						orderByString = append(orderByString, v)
+					}
+				}
+
+				rawSQL = fmt.Sprintf("%s ORDER %s", rawSQL, strings.Join(orderByString, ","))
+			}
 			if b.limit > 0 {
 				rawSQL = fmt.Sprintf("%s LIMIT %d", rawSQL, b.limit)
 			}

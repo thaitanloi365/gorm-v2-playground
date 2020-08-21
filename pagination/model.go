@@ -24,6 +24,7 @@ type Builder interface {
 	WithRawSQL(rawSQL *gorm.DB) Builder
 	Limit(int) Builder
 	Page(int) Builder
+	Order(interface{}) Builder
 	Paginate(result interface{}) *Pagination
 	SkipLimitOffset(bool) Builder
 }
@@ -35,4 +36,5 @@ type builder struct {
 	limit           int
 	offset          int
 	skipLimitOffset bool
+	orderBy         []interface{}
 }
