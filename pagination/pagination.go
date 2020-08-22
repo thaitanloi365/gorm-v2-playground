@@ -17,6 +17,11 @@ func New(db *gorm.DB) Builder {
 	}
 }
 
+func (b *builder) WithRawSQL(rawSQL *gorm.DB) Builder {
+	b.rawSQL = rawSQL
+	return b
+}
+
 func (b *builder) Limit(limit int) Builder {
 	b.limit = limit
 	return b
@@ -29,11 +34,6 @@ func (b *builder) Page(page int) Builder {
 
 func (b *builder) Order(orderBy interface{}) Builder {
 	b.orderBy = append(b.orderBy, orderBy)
-	return b
-}
-
-func (b *builder) WithRawSQL(rawSQL *gorm.DB) Builder {
-	b.rawSQL = rawSQL
 	return b
 }
 

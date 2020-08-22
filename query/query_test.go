@@ -52,6 +52,24 @@ func TestQuery(t *testing.T) {
 	if err != nil {
 		panic(err)
 	}
-	var b = New(db).Where("email = ?", "1234")
-	fmt.Println(b)
+
+	var u User
+	err = New(db).Raw("SELECT * FROM users").Where("email = ?", "user_18@gmail.com").Where("email = ?", "user_19@test.com").WhereFunc(func(b Builder) {
+
+	}).Group("email,phone").Order("email DESC").Scan(&u)
+	if err != nil {
+		panic(err)
+	}
+
+	// var u User
+	// err = db.Raw(`SELECT * FROM users WHERE email = ? LIMIT 1`, "user_19@test.com").Scan(&u).Error
+	// if err != nil {
+	// 	panic(err)
+	// }
+
+	// db.Where("email = ?", "user_19@test.com").First(&u)
+	// fmt.Println(u)
+
+	// fmt.Println("r", r)
+	// fmt.Println(result)
 }
