@@ -1,10 +1,14 @@
 package main
 
+import "gorm.io/gorm"
+
 // Model model
 type Model struct {
-	ID        string `gorm:"primaryKey" json:"-"`
-	UpdatedAt int64  `gorm:"autoUpdateTime" json:"updated_at"`
-	CreatedAt int64  `gorm:"autoCreateTime" json:"created_at"`
+	gorm.Model
+	ID        string         `gorm:"primaryKey" json:"-"`
+	UpdatedAt int64          `gorm:"autoUpdateTime" json:"updated_at"`
+	CreatedAt int64          `gorm:"autoCreateTime" json:"created_at"`
+	DeletedAt gorm.DeletedAt `json:"-"`
 }
 
 // User user
