@@ -1,6 +1,7 @@
 package query
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -53,13 +54,18 @@ func TestQuery(t *testing.T) {
 		panic(err)
 	}
 
-	var u User
-	err = New(db).Raw("SELECT * FROM users").Where("email = ?", "user_18@gmail.com").Where("email = ?", "user_19@test.com").WhereFunc(func(b Builder) {
-
-	}).Group("email,phone").Order("email DESC").Scan(&u)
+	var users []*User
+	p, err := New(db.Find(&users)).Where("email <> ?", "").Page(2).Limit(20).Paginate(&users)
 	if err != nil {
 		panic(err)
 	}
+
+	data, err := json.Marshal(p)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(string(data))
 
 	// var u User
 	// err = db.Raw(`SELECT * FROM users WHERE email = ? LIMIT 1`, "user_19@test.com").Scan(&u).Error

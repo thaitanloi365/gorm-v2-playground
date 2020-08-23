@@ -11,7 +11,8 @@ import (
 // New new builder
 func New(db *gorm.DB) Builder {
 	return &builder{
-		db:              db,
+		db: db,
+
 		skipLimitOffset: false,
 		orderBy:         []interface{}{},
 	}
@@ -60,7 +61,9 @@ func (b *builder) Paginate(result interface{}) *Pagination {
 	var done = make(chan bool, 1)
 	var count int64
 
-	go func() {
+	var sqlString = b.rawSQL.Statement.SQL.String()
+
+	go func(sqlString string) {
 		var sessionConfig = &gorm.Session{PrepareStmt: true}
 		if b.rawSQL == nil {
 			b.db.Session(sessionConfig).Model(result).Count(&count)
@@ -71,7 +74,7 @@ func (b *builder) Paginate(result interface{}) *Pagination {
 			b.rawSQL.Session(sessionConfig).Raw(rawSQL, vars).Row().Scan(&count)
 		}
 		done <- true
-	}()
+	}(sqlString)
 
 	if b.rawSQL == nil {
 		var session = b.db.Session(&gorm.Session{PrepareStmt: true})

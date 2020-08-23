@@ -2,6 +2,9 @@ package query
 
 import (
 	"fmt"
+	"log"
+	"math"
+	"os"
 	"strings"
 
 	"gorm.io/gorm"
@@ -9,54 +12,49 @@ import (
 	"gorm.io/gorm/utils"
 )
 
-// WhereFunc where func
-type WhereFunc = func(b Builder)
-
 // New builder
 func New(db *gorm.DB) Builder {
 	return &builder{
 		db:        db,
-		values:    []interface{}{},
-		rawSQL:    "",
 		statement: &gorm.Statement{DB: db, Clauses: map[string]clause.Clause{}},
+		logger:    log.New(os.Stdout, "go-query", log.Lshortfile),
 	}
-}
-
-func (b *builder) Raw(sql string) Builder {
-	b.rawSQL = sql
-	return b
 }
 
 // Exec exec
 func (b *builder) Scan(dest interface{}) (err error) {
-	q, vars := b.Prepare()
-	err = b.db.Raw(q, vars...).Scan(dest).Error
+	var statement = b.Prepare()
+	statement.Build("SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT", "GROUP BY")
+
+	var sql = statement.SQL.String()
+	var vars = statement.Vars
+	err = b.db.Raw(sql, vars...).Scan(dest).Error
 
 	return
 }
 
 // Exec exec
-func (b *builder) Prepare() (string, []interface{}) {
-	var listClause = []string{}
-	for key := range b.statement.Clauses {
-		listClause = append(listClause, key)
-	}
-	b.statement.Build(listClause...)
-
-	var vars = b.statement.Vars
-	var rawSQL = b.statement.SQL.String()
-
-	if b.rawSQL != "" {
-		rawSQL = fmt.Sprintf("%s %s", b.rawSQL, rawSQL)
+func (b *builder) Prepare() (statement *gorm.Statement) {
+	statement = &gorm.Statement{DB: b.db, Clauses: map[string]clause.Clause{}}
+	if !b.db.DryRun {
+		b.db.Statement.Build()
+		addClause(statement, b.db.Statement.Clauses)
 	}
 
-	return rawSQL, vars
+	addClause(statement, b.statement.Clauses)
+
+	return
+}
+
+func (b *builder) SkipLimitOffset(skip bool) Builder {
+	b.skipLimitOffset = skip
+	return b
 }
 
 // Where where
 func (b *builder) Where(query interface{}, value ...interface{}) Builder {
 	if expressions := b.statement.BuildCondition(query, value); len(expressions) > 0 {
-		b.statement.AddClause(clause.Where{Exprs: expressions})
+		b.db.Statement.AddClause(clause.Where{Exprs: expressions})
 	}
 
 	return b
@@ -65,6 +63,19 @@ func (b *builder) Where(query interface{}, value ...interface{}) Builder {
 // WhereFunc where func
 func (b *builder) WhereFunc(f WhereFunc) Builder {
 	f(b)
+	return b
+}
+
+// WhereFunc where func
+func (b *builder) Limit(limit int) Builder {
+	b.limit = limit
+	return b
+}
+
+// WhereFunc where func
+func (b *builder) Page(page int) Builder {
+	b.page = page
+
 	return b
 }
 
@@ -95,4 +106,168 @@ func (b *builder) Group(name string) Builder {
 	})
 
 	return b
+}
+
+func (b *builder) Paginate(dest interface{}) (*Pagination, error) {
+	b.preparePaginate()
+
+	var countStatement = &gorm.Statement{
+		DB:       b.db.Statement.DB,
+		Clauses:  b.db.Statement.Clauses,
+		SQL:      b.db.Statement.SQL,
+		Schema:   b.db.Statement.Schema,
+		Table:    b.db.Statement.Table,
+		Vars:     b.db.Statement.Vars,
+		Selects:  b.db.Statement.Selects,
+		Omits:    b.db.Statement.Omits,
+		Distinct: b.db.Statement.Distinct,
+	}
+
+	// Build count sql
+	countStatement.Build("SELECT", "FROM", "WHERE", "GROUP BY", "FOR", "ORDER BY")
+	var countSQL = countStatement.SQL.String()
+	var countSQLVars = countStatement.Vars
+
+	// Build sql
+	b.db.Statement.AddClause(clause.Limit{
+		Limit:  b.limit,
+		Offset: b.offset,
+	})
+	b.db.Statement.Build("SELECT", "FROM", "WHERE", "GROUP BY", "FOR", "ORDER BY", "LIMIT")
+	var sql = b.db.Statement.SQL.String()
+	var vars = b.db.Statement.Vars
+
+	var done = make(chan bool, 1)
+	var count int64
+
+	go func() {
+		var countSQL = fmt.Sprintf("SELECT COUNT(*) as count FROM (%s) t", countSQL)
+		var err = b.db.Raw(countSQL, countSQLVars...).Row().Scan(&count)
+		if err != nil {
+			b.logger.Fatal(err)
+		}
+		done <- true
+	}()
+
+	var err = b.db.Raw(sql, vars...).Scan(&dest).Error
+	if err != nil {
+		b.logger.Fatal(err)
+	}
+
+	<-done
+
+	var pagination = b.finalizePaginate(count, &dest)
+
+	return pagination, nil
+}
+
+func (b *builder) PaginateFunc(execFunc ExecFunc) (*Pagination, error) {
+	b.preparePaginate()
+
+	b.statement.AddClause(clause.Limit{
+		Limit:  b.limit,
+		Offset: b.offset,
+	})
+
+	addClause(b.db.Statement, b.statement.Clauses)
+
+	var session = b.db.Session(&gorm.Session{PrepareStmt: true})
+
+	// Build count SQL
+	session.Statement.Build("SELECT", "FROM", "WHERE", "GROUP BY", "FOR")
+
+	var countSQL = session.Statement.SQL.String()
+	var countSQLVars = session.Statement.Vars
+
+	b.db.Statement.Build("ORDER BY", "LIMIT")
+	var sql = session.Statement.SQL.String()
+	var vars = session.Statement.Vars
+
+	var done = make(chan bool, 1)
+	var count int64
+
+	go func() {
+		var countSQL = fmt.Sprintf("SELECT COUNT(*) as count FROM (%s) t", countSQL)
+		var err = session.Raw(countSQL, countSQLVars...).Row().Scan(&count)
+		if err != nil {
+			b.logger.Fatal(err)
+		}
+		done <- true
+	}()
+
+	o, err := execFunc(session.Raw(sql, vars...))
+	if err != nil {
+		b.logger.Fatal(err)
+	}
+
+	<-done
+
+	var pagination = b.finalizePaginate(count, &o)
+
+	return pagination, nil
+}
+
+func (b *builder) preparePaginate() {
+	if b.skipLimitOffset {
+		return
+	}
+
+	if b.page < 1 {
+		b.page = 1
+	}
+	if b.limit == 0 {
+		b.limit = 10
+	}
+
+	if b.page == 1 {
+		b.offset = 0
+	} else {
+		b.offset = (b.page - 1) * b.limit
+	}
+}
+
+func (b *builder) finalizePaginate(count int64, records interface{}) *Pagination {
+	var pagination = &Pagination{
+		TotalRecord: int(count),
+		Records:     records,
+		Page:        b.page,
+		PerPage:     b.limit,
+		Offset:      b.offset,
+	}
+
+	if b.limit > 0 {
+		pagination.PerPage = b.limit
+		pagination.TotalPage = int(math.Ceil(float64(count) / float64(b.limit)))
+	} else {
+		pagination.TotalPage = 1
+		pagination.PerPage = int(count)
+	}
+
+	if b.skipLimitOffset {
+		pagination.PerPage = int(count)
+		pagination.TotalRecord = int(count)
+		pagination.Offset = 0
+
+	}
+
+	if b.page > 1 {
+		pagination.PrevPage = b.page - 1
+	} else {
+		pagination.PrevPage = b.page
+	}
+
+	if b.page == pagination.TotalPage {
+		pagination.NextPage = b.page
+	} else {
+		pagination.NextPage = b.page + 1
+	}
+
+	pagination.HasNext = pagination.TotalPage > pagination.Page
+	pagination.HasPrev = pagination.Page > 1
+
+	if !pagination.HasNext {
+		pagination.NextPage = pagination.Page
+	}
+
+	return pagination
 }
