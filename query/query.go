@@ -15,33 +15,17 @@ import (
 // New builder
 func New(db *gorm.DB) Builder {
 	return &builder{
-		db:        db,
-		statement: &gorm.Statement{DB: db, Clauses: map[string]clause.Clause{}},
-		logger:    log.New(os.Stdout, "go-query", log.Lshortfile),
+		db:     db,
+		logger: log.New(os.Stdout, "go-query", log.Lshortfile),
 	}
 }
 
 // Exec exec
 func (b *builder) Scan(dest interface{}) (err error) {
-	var statement = b.Prepare()
-	statement.Build("SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT", "GROUP BY")
-
-	var sql = statement.SQL.String()
-	var vars = statement.Vars
+	b.db.Statement.Build("SELECT", "FROM", "WHERE", "ORDER BY", "LIMIT", "GROUP BY", "FOR")
+	var sql = b.db.Statement.SQL.String()
+	var vars = b.db.Statement.Vars
 	err = b.db.Raw(sql, vars...).Scan(dest).Error
-
-	return
-}
-
-// Exec exec
-func (b *builder) Prepare() (statement *gorm.Statement) {
-	statement = &gorm.Statement{DB: b.db, Clauses: map[string]clause.Clause{}}
-	if !b.db.DryRun {
-		b.db.Statement.Build()
-		addClause(statement, b.db.Statement.Clauses)
-	}
-
-	addClause(statement, b.statement.Clauses)
 
 	return
 }
@@ -53,7 +37,7 @@ func (b *builder) SkipLimitOffset(skip bool) Builder {
 
 // Where where
 func (b *builder) Where(query interface{}, value ...interface{}) Builder {
-	if expressions := b.statement.BuildCondition(query, value); len(expressions) > 0 {
+	if expressions := b.db.Statement.BuildCondition(query, value); len(expressions) > 0 {
 		b.db.Statement.AddClause(clause.Where{Exprs: expressions})
 	}
 
@@ -83,11 +67,11 @@ func (b *builder) Page(page int) Builder {
 func (b *builder) Order(value interface{}) Builder {
 	switch v := value.(type) {
 	case clause.OrderByColumn:
-		b.statement.AddClause(clause.OrderBy{
+		b.db.Statement.AddClause(clause.OrderBy{
 			Columns: []clause.OrderByColumn{v},
 		})
 	default:
-		b.statement.AddClause(clause.OrderBy{
+		b.db.Statement.AddClause(clause.OrderBy{
 			Columns: []clause.OrderByColumn{{
 				Column: clause.Column{Name: fmt.Sprint(value), Raw: true},
 			}},
@@ -101,7 +85,7 @@ func (b *builder) Order(value interface{}) Builder {
 func (b *builder) Group(name string) Builder {
 	var fields = strings.FieldsFunc(name, utils.IsChar)
 
-	b.statement.AddClause(clause.GroupBy{
+	b.db.Statement.AddClause(clause.GroupBy{
 		Columns: []clause.Column{{Name: name, Raw: len(fields) != 1}},
 	})
 
@@ -164,12 +148,10 @@ func (b *builder) Paginate(dest interface{}) (*Pagination, error) {
 func (b *builder) PaginateFunc(execFunc ExecFunc) (*Pagination, error) {
 	b.preparePaginate()
 
-	b.statement.AddClause(clause.Limit{
-		Limit:  b.limit,
-		Offset: b.offset,
-	})
-
-	addClause(b.db.Statement, b.statement.Clauses)
+	// b.db.Statement.AddClause(clause.Limit{
+	// 	Limit:  b.limit,
+	// 	Offset: b.offset,
+	// })
 
 	var session = b.db.Session(&gorm.Session{PrepareStmt: true})
 
@@ -179,7 +161,7 @@ func (b *builder) PaginateFunc(execFunc ExecFunc) (*Pagination, error) {
 	var countSQL = session.Statement.SQL.String()
 	var countSQLVars = session.Statement.Vars
 
-	b.db.Statement.Build("ORDER BY", "LIMIT")
+	session.Statement.Build("ORDER BY", "LIMIT")
 	var sql = session.Statement.SQL.String()
 	var vars = session.Statement.Vars
 

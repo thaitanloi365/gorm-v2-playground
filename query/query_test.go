@@ -23,17 +23,29 @@ func TestQuery(t *testing.T) {
 		CreatedAt int64  `gorm:"autoCreateTime" json:"created_at"`
 	}
 
+	type Profile struct {
+		Model
+		Avatar string
+	}
+
 	// User user
 	type User struct {
 		Model
-		Email string `json:"email"`
-		Phone string `json:"phone"`
+		Email     string   `json:"email"`
+		Phone     string   `json:"phone"`
+		ProfileID string   `json:"-"`
+		Profile   *Profile `json:"profile"`
 	}
 
 	if db.Migrator().HasTable(&User{}) {
 		db.Migrator().DropTable(&User{})
 	}
 
+	if db.Migrator().HasTable(&Profile{}) {
+		db.Migrator().DropTable(&Profile{})
+	}
+
+	db.AutoMigrate(&Profile{})
 	db.AutoMigrate(&User{})
 
 	var createUsers = []*User{}
@@ -45,6 +57,9 @@ func TestQuery(t *testing.T) {
 			},
 			Email: fmt.Sprintf("user_%d@test.com", i),
 			Phone: "+12345678910",
+			Profile: &Profile{
+				Avatar: fmt.Sprintf("avatar_%d", i),
+			},
 		}
 		createUsers = append(createUsers, &user)
 	}
@@ -67,6 +82,51 @@ func TestQuery(t *testing.T) {
 
 	fmt.Println(string(data))
 
+	err = New(db.Raw("SELECT * FROM users")).Scan(&users)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(users)
+
+	var profiles []*Profile
+	err = New(db.Raw("SELECT * FROM profiles")).Scan(&profiles)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(profiles)
+
+	data, err = json.Marshal(profiles)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(string(data))
+
+	New(db.Raw("SELECT * FROM users LEFT JOIN profiles ON profiles.id = users.profile_id")).PaginateFunc(func(db *gorm.DB) (records interface{}, err error) {
+		type UserAlias struct {
+			User    *User `gorm:"embedded"`
+			Profile JSONRaw
+		}
+
+		var users []*User
+		rows, err := db.Rows()
+		if err != nil {
+			return users, err
+		}
+
+		var session = db.Session(&gorm.Session{PrepareStmt: true})
+		for rows.Next() {
+			var alias UserAlias
+			var err = session.ScanRows(rows, &alias)
+			if err != nil {
+				continue
+			}
+
+			fmt.Println("alias", alias.Profile)
+		}
+
+		return users, nil
+	})
 	// var u User
 	// err = db.Raw(`SELECT * FROM users WHERE email = ? LIMIT 1`, "user_19@test.com").Scan(&u).Error
 	// if err != nil {

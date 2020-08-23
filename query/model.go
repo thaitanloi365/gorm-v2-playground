@@ -14,7 +14,6 @@ type ExecFunc = func(db *gorm.DB) (records interface{}, err error)
 
 type builder struct {
 	db              *gorm.DB
-	statement       *gorm.Statement
 	page            int
 	limit           int
 	offset          int
@@ -43,9 +42,9 @@ type Builder interface {
 	WhereFunc(WhereFunc) Builder
 	Order(order interface{}) Builder
 	Scan(dest interface{}) error
-	Prepare() *gorm.Statement
 	Group(name string) Builder
 	Limit(int) Builder
 	Page(int) Builder
 	Paginate(dest interface{}) (*Pagination, error)
+	PaginateFunc(execFunc ExecFunc) (*Pagination, error)
 }
