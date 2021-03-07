@@ -126,6 +126,8 @@ func (b *builder) Paginate(dest interface{}) (*Pagination, error) {
 
 	go func() {
 		var countSQL = fmt.Sprintf("SELECT COUNT(*) as count FROM (%s) t", countSQL)
+		fmt.Println("countSQL", countSQL)
+		fmt.Println("countSQLVars", countSQLVars)
 		var err = b.db.Raw(countSQL, countSQLVars...).Row().Scan(&count)
 		if err != nil {
 			b.logger.Fatal(err)

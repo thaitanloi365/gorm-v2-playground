@@ -9,34 +9,72 @@ import (
 	"gorm.io/gorm"
 )
 
+var db *gorm.DB
+
+// Model model
+type Model struct {
+	ID        uint  `gorm:"primaryKey" json:"-"`
+	UpdatedAt int64 `gorm:"autoUpdateTime" json:"updated_at"`
+	CreatedAt int64 `gorm:"autoCreateTime" json:"created_at"`
+}
+
+type Profile struct {
+	Model
+	Avatar string
+}
+
+// User user
+type User struct {
+	Model
+	Email     string   `json:"email"`
+	Phone     string   `json:"phone"`
+	ProfileID string   `json:"profile_id"`
+	Profile   *Profile `json:"profile"`
+}
+
 func TestQuery(t *testing.T) {
-	db, err := gorm.Open(sqlite.Open("test_pagination.db"), &gorm.Config{})
+	var err error
+	db, err = gorm.Open(sqlite.Open("test_pagination.db"), &gorm.Config{})
 	if err != nil {
 		panic("failed to connect database")
 	}
 	db = db.Debug()
 
-	// Model model
-	type Model struct {
-		ID        string `gorm:"primaryKey" json:"-"`
-		UpdatedAt int64  `gorm:"autoUpdateTime" json:"updated_at"`
-		CreatedAt int64  `gorm:"autoCreateTime" json:"created_at"`
-	}
+	New(db.Raw("SELECT users.*, profiles.id AS profile_id, profiles.avatar AS profile_avatar FROM users LEFT JOIN profiles ON profiles.id = users.profile_id")).PaginateFunc(func(db *gorm.DB) (records interface{}, err error) {
+		type UserAlias struct {
+			User    *User    `gorm:"embedded"`
+			Profile *Profile `gorm:"embedded;embeddedPrefix:profile_"`
+		}
 
-	type Profile struct {
-		Model
-		Avatar string
-	}
+		var users []*User
+		rows, err := db.Rows()
+		if err != nil {
+			return users, err
+		}
 
-	// User user
-	type User struct {
-		Model
-		Email     string   `json:"email"`
-		Phone     string   `json:"phone"`
-		ProfileID string   `json:"-"`
-		Profile   *Profile `json:"profile"`
-	}
+		for rows.Next() {
+			var alias UserAlias
+			var err = db.ScanRows(rows, &alias)
+			if err != nil {
+				fmt.Println(err)
+				continue
+			}
 
+			data, err := json.Marshal(&alias)
+			if err != nil {
+				panic(err)
+			}
+
+			fmt.Println("data", string(data))
+		}
+
+		fmt.Println("done")
+		return users, nil
+	})
+
+}
+
+func mockData() {
 	if db.Migrator().HasTable(&User{}) {
 		db.Migrator().DropTable(&User{})
 	}
@@ -47,14 +85,10 @@ func TestQuery(t *testing.T) {
 
 	db.AutoMigrate(&Profile{})
 	db.AutoMigrate(&User{})
-
 	var createUsers = []*User{}
 	// Seed database
 	for i := 0; i < 20; i++ {
 		var user = User{
-			Model: Model{
-				ID: fmt.Sprintf("user_%d", i),
-			},
 			Email: fmt.Sprintf("user_%d@test.com", i),
 			Phone: "+12345678910",
 			Profile: &Profile{
@@ -64,7 +98,7 @@ func TestQuery(t *testing.T) {
 		createUsers = append(createUsers, &user)
 	}
 
-	err = db.Create(&createUsers).Error
+	var err = db.Create(&createUsers).Error
 	if err != nil {
 		panic(err)
 	}
@@ -75,67 +109,24 @@ func TestQuery(t *testing.T) {
 		panic(err)
 	}
 
-	data, err := json.Marshal(p)
+	printJSON(p)
+
+	err = New(db.Debug().Raw("SELECT * FROM users")).Scan(&users)
 	if err != nil {
 		panic(err)
 	}
-
-	fmt.Println(string(data))
-
-	err = New(db.Raw("SELECT * FROM users")).Scan(&users)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(users)
+	printJSON(users)
 
 	var profiles []*Profile
-	err = New(db.Raw("SELECT * FROM profiles")).Scan(&profiles)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(profiles)
-
-	data, err = json.Marshal(profiles)
+	err = New(db.Debug().Raw("SELECT * FROM profiles")).Scan(&profiles)
 	if err != nil {
 		panic(err)
 	}
 
+	printJSON(profiles)
+
+}
+func printJSON(in interface{}) {
+	data, _ := json.MarshalIndent(&in, "", "    ")
 	fmt.Println(string(data))
-
-	New(db.Raw("SELECT * FROM users LEFT JOIN profiles ON profiles.id = users.profile_id")).PaginateFunc(func(db *gorm.DB) (records interface{}, err error) {
-		type UserAlias struct {
-			User    *User `gorm:"embedded"`
-			Profile JSONRaw
-		}
-
-		var users []*User
-		rows, err := db.Rows()
-		if err != nil {
-			return users, err
-		}
-
-		var session = db.Session(&gorm.Session{PrepareStmt: true})
-		for rows.Next() {
-			var alias UserAlias
-			var err = session.ScanRows(rows, &alias)
-			if err != nil {
-				continue
-			}
-
-			fmt.Println("alias", alias.Profile)
-		}
-
-		return users, nil
-	})
-	// var u User
-	// err = db.Raw(`SELECT * FROM users WHERE email = ? LIMIT 1`, "user_19@test.com").Scan(&u).Error
-	// if err != nil {
-	// 	panic(err)
-	// }
-
-	// db.Where("email = ?", "user_19@test.com").First(&u)
-	// fmt.Println(u)
-
-	// fmt.Println("r", r)
-	// fmt.Println(result)
 }
