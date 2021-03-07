@@ -13,7 +13,7 @@ var db *gorm.DB
 
 // Model model
 type Model struct {
-	ID        uint  `gorm:"primaryKey" json:"-"`
+	ID        uint  `gorm:"primaryKey" json:"id"`
 	UpdatedAt int64 `gorm:"autoUpdateTime" json:"updated_at"`
 	CreatedAt int64 `gorm:"autoCreateTime" json:"created_at"`
 }
@@ -40,7 +40,7 @@ func TestQuery(t *testing.T) {
 	}
 	db = db.Debug()
 
-	New(db.Raw("SELECT users.*, profiles.id AS profile_id, profiles.avatar AS profile_avatar FROM users LEFT JOIN profiles ON profiles.id = users.profile_id")).PaginateFunc(func(db *gorm.DB) (records interface{}, err error) {
+	New(db.Raw("SELECT users.id AS id, users.profile_id AS profile_id, profiles.id AS profile_id, profiles.created_at AS profile_created_at, profiles.avatar AS profile_avatar FROM users LEFT JOIN profiles ON profiles.id = users.profile_id")).PaginateFunc(func(db *gorm.DB) (records interface{}, err error) {
 		type UserAlias struct {
 			User    *User    `gorm:"embedded"`
 			Profile *Profile `gorm:"embedded;embeddedPrefix:profile_"`
