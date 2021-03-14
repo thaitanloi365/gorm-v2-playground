@@ -5,11 +5,32 @@ import (
 	"fmt"
 	"testing"
 
-	"gorm.io/driver/sqlite"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
 
-var db *gorm.DB
+type CustomString string
+
+var db *DBTest
+
+type DBTest struct {
+	*gorm.DB
+}
+
+func (db *DBTest) GetGorm() *gorm.DB {
+	return db.DB
+}
+
+func (db *DBTest) WithGorm(gdb *gorm.DB) DB {
+	db.DB = gdb
+	return db
+}
+
+func (db *DBTest) SetDebug(debug bool) {
+	if debug {
+		db.DB = db.DB.Debug()
+	}
+}
 
 // Model model
 type Model struct {
@@ -20,7 +41,7 @@ type Model struct {
 
 type Profile struct {
 	Model
-	Avatar string
+	Avatar string `json:"avatar"`
 }
 
 type CreditCard struct {
@@ -39,50 +60,115 @@ type User struct {
 	CreditCards []*CreditCard `json:"credit_cards"`
 }
 
+func TestQueryWhereNamed(t *testing.T) {
+	initDB()
+	New(db, "SELECT users.id AS user_id, users.profile_id AS user_profile_id, users.profile_id AS profile_id, profiles.id AS profile_id, profiles.created_at AS profile_created_at, profiles.avatar AS profile_avatar FROM users LEFT JOIN profiles ON profiles.id = users.profile_id").
+		PagingFunc(func(db, rawSQL DB) (interface{}, error) {
+			// type UserAlias struct {
+			// 	User    *User    `gorm:"embedded;embeddedPrefix:user_"`
+			// 	Profile *Profile `gorm:"embedded;embeddedPrefix:profile_"`
+			// }
+
+			var users []*User
+			// var alias []*UserAlias
+			var results []map[string]interface{}
+
+			db.GetGorm().Model(&User{}).Find(&results)
+
+			printJSON(results)
+			// rows, err := db.Rows()
+			// if err != nil {
+			// 	return users, err
+			// }
+
+			// for rows.Next() {
+			// 	var alias UserAlias
+			// 	var err = db.ScanRows(rows, &alias)
+			// 	if err != nil {
+			// 		fmt.Println(err)
+			// 		continue
+			// 	}
+
+			// 	data, err := json.Marshal(&alias)
+			// 	if err != nil {
+			// 		panic(err)
+			// 	}
+
+			// 	fmt.Println("data", string(data))
+			// }
+
+			// fmt.Println("done")
+			return users, nil
+
+		})
+}
 func TestQuery(t *testing.T) {
-	var err error
-	db, err = gorm.Open(sqlite.Open("test_pagination.db"), &gorm.Config{})
+	initDB()
+
+	var customString CustomString = "33"
+	var customStrings = []CustomString{
+		"1", "2",
+	}
+
+	var result = New(db, `
+  SELECT u.*, (
+    CASE
+      WHEN u.id = @user_id OR u.email = @user_name OR u.email IN @user_names THEN @then_value
+      ELSE FALSE
+    END
+  ) ,
+  row_to_json(p) AS profile
+  FROM users u LEFT JOIN profiles p ON p.id = u.profile_id
+  `).
+		// NamedMap(map[string]interface{}{
+		// 	"user_id":    1,
+		// 	"user_name":  &customString,
+		// 	"user_names": customStrings,
+		// 	"then_value": true,
+		// }).
+		Where("u.id < ?", 5).
+		Where(map[string]interface{}{
+			"user_id":    1,
+			"user_name":  &customString,
+			"user_names": customStrings,
+			"then_value": true,
+		}).
+		Having("u.id > 0").
+		OrderBy("u.id DESC").
+		GroupBy("u.id, p.*").
+		Page(1).
+		Limit(20).
+		PagingFunc(func(db, rawSQL DB) (interface{}, error) {
+			type UserAlias struct {
+				User    *User    `gorm:"embedded;embeddedPrefix:user_"`
+				Profile *Profile `gorm:"embedded;embeddedPrefix:profile_"`
+			}
+
+			// var users []*User
+			var results []map[string]interface{}
+
+			// var where = map[string]interface{}{
+			// 	"user_id": 10,
+			// }
+			// db.GetGorm().Model(&User{}).Where("id = ?", 1).Find(&results)
+			rawSQL.GetGorm().Find(&results)
+
+			return results, nil
+		})
+
+	printJSON(result)
+}
+
+func initDB() {
+	var uri = "host=localhost user=postgres password= dbname=gorm_test port=5432 sslmode=disable"
+	gdb, err := gorm.Open(postgres.Open(uri), &gorm.Config{})
 	if err != nil {
 		panic("failed to connect database")
 	}
-	db = db.Debug()
-
-	New(db.Raw("SELECT users.id AS user_id, users.profile_id AS user_profile_id, users.profile_id AS profile_id, profiles.id AS profile_id, profiles.created_at AS profile_created_at, profiles.avatar AS profile_avatar FROM users LEFT JOIN profiles ON profiles.id = users.profile_id")).PaginateFunc(func(db *gorm.DB) (records interface{}, err error) {
-		type UserAlias struct {
-			User    *User    `gorm:"embedded;embeddedPrefix:user_"`
-			Profile *Profile `gorm:"embedded;embeddedPrefix:profile_"`
-		}
-
-		var users []*User
-		var alias []*UserAlias
-		db.Model(&User{}).Find(&alias)
-
-		printJSON(alias)
-		// rows, err := db.Rows()
-		// if err != nil {
-		// 	return users, err
-		// }
-
-		// for rows.Next() {
-		// 	var alias UserAlias
-		// 	var err = db.ScanRows(rows, &alias)
-		// 	if err != nil {
-		// 		fmt.Println(err)
-		// 		continue
-		// 	}
-
-		// 	data, err := json.Marshal(&alias)
-		// 	if err != nil {
-		// 		panic(err)
-		// 	}
-
-		// 	fmt.Println("data", string(data))
-		// }
-
-		// fmt.Println("done")
-		return users, nil
-	})
-
+	db = &DBTest{
+		DB: gdb,
+	}
+	db.SetDebug(true)
 }
 
 func mockData() {
@@ -135,28 +221,6 @@ func mockData() {
 	if err != nil {
 		panic(err)
 	}
-
-	var users []*User
-	p, err := New(db.Find(&users)).Where("email <> ?", "").Page(2).Limit(20).Paginate(&users)
-	if err != nil {
-		panic(err)
-	}
-
-	printJSON(p)
-
-	err = New(db.Debug().Raw("SELECT * FROM users")).Scan(&users)
-	if err != nil {
-		panic(err)
-	}
-	printJSON(users)
-
-	var profiles []*Profile
-	err = New(db.Debug().Raw("SELECT * FROM profiles")).Scan(&profiles)
-	if err != nil {
-		panic(err)
-	}
-
-	printJSON(profiles)
 
 }
 func printJSON(in interface{}) {
