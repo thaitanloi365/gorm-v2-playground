@@ -3,8 +3,11 @@ package query
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"testing"
 
+	jsoniter "github.com/json-iterator/go"
+	"gorm.io/datatypes"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 )
@@ -24,12 +27,6 @@ func (db *DBTest) GetGorm() *gorm.DB {
 func (db *DBTest) WithGorm(gdb *gorm.DB) DB {
 	db.DB = gdb
 	return db
-}
-
-func (db *DBTest) SetDebug(debug bool) {
-	if debug {
-		db.DB = db.DB.Debug()
-	}
 }
 
 // Model model
@@ -55,108 +52,222 @@ type User struct {
 	Model
 	Email       string        `json:"email"`
 	Phone       string        `json:"phone"`
-	ProfileID   string        `json:"profile_id"`
+	ProfileID   uint          `json:"profile_id"`
 	Profile     *Profile      `json:"profile"`
 	CreditCards []*CreditCard `json:"credit_cards"`
 }
 
-func TestQueryWhereNamed(t *testing.T) {
+func TestWrapJSONPagingFunc(t *testing.T) {
 	initDB()
-	New(db, "SELECT users.id AS user_id, users.profile_id AS user_profile_id, users.profile_id AS profile_id, profiles.id AS profile_id, profiles.created_at AS profile_created_at, profiles.avatar AS profile_avatar FROM users LEFT JOIN profiles ON profiles.id = users.profile_id").
-		PagingFunc(func(db, rawSQL DB) (interface{}, error) {
-			// type UserAlias struct {
-			// 	User    *User    `gorm:"embedded;embeddedPrefix:user_"`
-			// 	Profile *Profile `gorm:"embedded;embeddedPrefix:profile_"`
-			// }
 
+	var sql = `
+	SELECT u.*, row_to_json(p) AS profile, json_agg(DISTINCT(cc)) FILTER (WHERE cc IS NOT NULL) AS credit_cards
+ 	FROM users u 
+	LEFT JOIN profiles p ON p.id = u.profile_id
+	LEFT JOIN credit_cards cc ON cc.user_id = u.id
+	`
+
+	var result = New(db, sql).
+		WithWrapJSON(true).
+		GroupBy("u.id, p.id").
+		PagingFunc(func(db, rawSQL DB) (interface{}, error) {
 			var users []*User
-			// var alias []*UserAlias
-			var results []map[string]interface{}
 
-			db.GetGorm().Model(&User{}).Find(&results)
-
-			printJSON(results)
-			// rows, err := db.Rows()
-			// if err != nil {
-			// 	return users, err
-			// }
-
-			// for rows.Next() {
-			// 	var alias UserAlias
-			// 	var err = db.ScanRows(rows, &alias)
-			// 	if err != nil {
-			// 		fmt.Println(err)
-			// 		continue
-			// 	}
-
-			// 	data, err := json.Marshal(&alias)
-			// 	if err != nil {
-			// 		panic(err)
-			// 	}
-
-			// 	fmt.Println("data", string(data))
-			// }
-
-			// fmt.Println("done")
-			return users, nil
-
-		})
-}
-func TestQuery(t *testing.T) {
-	initDB()
-
-	var customString CustomString = "33"
-	var customStrings = []CustomString{
-		"1", "2",
-	}
-
-	var result = New(db, `
-  SELECT u.*, (
-    CASE
-      WHEN u.id = @user_id OR u.email = @user_name OR u.email IN @user_names THEN @then_value
-      ELSE FALSE
-    END
-  ) ,
-  row_to_json(p) AS profile
-  FROM users u LEFT JOIN profiles p ON p.id = u.profile_id
-  `).
-		// NamedMap(map[string]interface{}{
-		// 	"user_id":    1,
-		// 	"user_name":  &customString,
-		// 	"user_names": customStrings,
-		// 	"then_value": true,
-		// }).
-		Where("u.id < ?", 5).
-		Where(map[string]interface{}{
-			"user_id":    1,
-			"user_name":  &customString,
-			"user_names": customStrings,
-			"then_value": true,
-		}).
-		Having("u.id > 0").
-		OrderBy("u.id DESC").
-		GroupBy("u.id, p.*").
-		Page(1).
-		Limit(20).
-		PagingFunc(func(db, rawSQL DB) (interface{}, error) {
-			type UserAlias struct {
-				User    *User    `gorm:"embedded;embeddedPrefix:user_"`
-				Profile *Profile `gorm:"embedded;embeddedPrefix:profile_"`
+			rows, err := rawSQL.GetGorm().Rows()
+			defer rows.Close()
+			if err != nil {
+				panic(err)
 			}
 
-			// var users []*User
-			var results []map[string]interface{}
+			var rawData JSON
+			for rows.Next() {
+				err = db.GetGorm().ScanRows(rows, &rawData)
+				if err != nil {
+					log.Fatalf("Scan row error: %v", err)
+					continue
+				}
 
-			// var where = map[string]interface{}{
-			// 	"user_id": 10,
-			// }
-			// db.GetGorm().Model(&User{}).Where("id = ?", 1).Find(&results)
-			rawSQL.GetGorm().Find(&results)
+				var user User
+				err = rawData.Alias.Unmarshal(&user)
+				if err != nil {
+					log.Fatalf("Unmarshal error: %v", err)
+					continue
+				}
 
-			return results, nil
+				users = append(users, &user)
+			}
+
+			return &users, nil
+
 		})
 
 	printJSON(result)
+}
+
+func TestPagingFunc(t *testing.T) {
+	initDB()
+
+	var sql = `
+	SELECT u.*, row_to_json(p) AS profile, json_agg(cc) AS credit_cards
+ 	FROM users u 
+	LEFT JOIN profiles p ON p.id = u.profile_id
+	LEFT JOIN credit_cards cc ON cc.user_id = u.id
+	`
+
+	var result = New(db, sql).
+		GroupBy("u.id, p.id").
+		PagingFunc(func(db, rawSQL DB) (interface{}, error) {
+			type UserAlias struct {
+				*User
+				Profile     datatypes.JSON
+				CreditCards datatypes.JSON
+			}
+
+			var users []*User
+
+			rows, err := rawSQL.GetGorm().Rows()
+			defer rows.Close()
+			if err != nil {
+				panic(err)
+			}
+
+			var userAlias UserAlias
+			for rows.Next() {
+				err = db.GetGorm().ScanRows(rows, &userAlias)
+				if err != nil {
+					continue
+				}
+				jsoniter.Unmarshal(userAlias.Profile, &userAlias.User.Profile)
+				jsoniter.Unmarshal(userAlias.CreditCards, &userAlias.User.CreditCards)
+				users = append(users, userAlias.User)
+			}
+
+			return &users, nil
+
+		})
+
+	printJSON(result)
+}
+
+func TestExecFunc(t *testing.T) {
+	initDB()
+
+	var sql = `
+	SELECT u.*, row_to_json(p) AS profile, json_agg(cc) AS credit_cards
+ 	FROM users u 
+	LEFT JOIN profiles p ON p.id = u.profile_id
+	LEFT JOIN credit_cards cc ON cc.user_id = u.id
+	`
+
+	var users []*User
+	var err = New(db, sql).
+		GroupBy("u.id, p.id").
+		ExecFunc(func(db, rawSQL DB) (interface{}, error) {
+			type UserAlias struct {
+				*User
+				Profile     datatypes.JSON
+				CreditCards datatypes.JSON
+			}
+
+			var users []*User
+
+			rows, err := rawSQL.GetGorm().Rows()
+			defer rows.Close()
+			if err != nil {
+				panic(err)
+			}
+
+			var userAlias UserAlias
+			for rows.Next() {
+				if err = db.GetGorm().ScanRows(rows, &userAlias); err != nil {
+					continue
+				}
+				jsoniter.Unmarshal(userAlias.Profile, &userAlias.User.Profile)
+				jsoniter.Unmarshal(userAlias.CreditCards, &userAlias.User.CreditCards)
+				users = append(users, userAlias.User)
+			}
+
+			return &users, nil
+		}, &users)
+	if err != nil {
+		panic(err)
+	}
+	printJSON(users)
+}
+
+func TestScan(t *testing.T) {
+	initDB()
+
+	var sql = `
+	SELECT COUNT(1) FROM users u
+	`
+
+	var totalUser = 0
+	var err = New(db, sql).
+		GroupBy("u.id").
+		Scan(&totalUser)
+	if err != nil {
+		panic(err)
+	}
+	printJSON(totalUser)
+}
+
+func TestScanStruct(t *testing.T) {
+	initDB()
+
+	var sql = `
+	SELECT COUNT(1) FILTER (WHERE id < 5) AS total_user1,
+	COUNT(1) FILTER (WHERE id > 5) AS total_user2
+	FROM users u
+	`
+	type CountResult struct {
+		TotalUser1 int `json:"total_user1"`
+		TotalUser2 int `json:"total_user2"`
+	}
+	var result CountResult
+
+	var err = New(db, sql).
+		Scan(&result)
+	if err != nil {
+		panic(err)
+	}
+	printJSON(result)
+}
+
+func TestScanMap(t *testing.T) {
+	initDB()
+
+	var sql = `
+	SELECT COUNT(1) FILTER (WHERE id < 5) AS total_user1,
+	COUNT(1) FILTER (WHERE id > 5) AS total_user2
+	FROM users u
+	`
+
+	var result = map[string]interface{}{}
+
+	var err = New(db, sql).
+		Scan(&result)
+	if err != nil {
+		panic(err)
+	}
+	printJSON(result)
+}
+
+func TestScanRow(t *testing.T) {
+	initDB()
+
+	var sql = `
+	SELECT COUNT(1) FROM users u
+	`
+
+	var totalUser = 0
+	var err = New(db, sql).
+		GroupBy("u.id").
+		ScanRow(&totalUser)
+	if err != nil {
+		panic(err)
+	}
+	printJSON(totalUser)
 }
 
 func initDB() {
@@ -166,9 +277,9 @@ func initDB() {
 		panic("failed to connect database")
 	}
 	db = &DBTest{
-		DB: gdb,
+		DB: gdb.Debug(),
 	}
-	db.SetDebug(true)
+
 }
 
 func mockData() {

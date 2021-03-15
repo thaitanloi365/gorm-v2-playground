@@ -3,6 +3,7 @@ package query
 import (
 	"database/sql"
 	"fmt"
+	"log"
 	"math"
 	"reflect"
 	"strings"
@@ -15,7 +16,6 @@ import (
 type DB interface {
 	GetGorm() *gorm.DB
 	WithGorm(db *gorm.DB) DB
-	SetDebug(bool)
 }
 
 // ExecFunc exec func
@@ -78,7 +78,7 @@ func (b *Builder) WithWrapJSON(isWrapJSON bool) *Builder {
 func (b *Builder) count(countSQL *gorm.DB, done chan bool, count *int) {
 	var err = countSQL.Scan(count).Error
 	if err != nil {
-		panic(err)
+		log.Fatalf("Scan row error: %v", err)
 	}
 	done <- true
 }
@@ -184,8 +184,11 @@ func (b *Builder) build() (queryString string, countQuery string, vars []interfa
 
 	if b.wrapJSON {
 		queryString = fmt.Sprintf(`
-		WITH alias AS (%s)
-		SELECT to_jsonb(row_to_json(alias)) AS alias FROM alias
+WITH alias AS (
+	%s
+)
+SELECT to_jsonb(row_to_json(alias)) AS alias 
+FROM alias
 		`, queryString)
 	}
 
@@ -212,7 +215,12 @@ func (b *Builder) PagingFunc(f ExecFunc) *Pagination {
 
 	result, err := f(b.db, b.db.WithGorm(b.db.GetGorm().Raw(sqlString, vars...)))
 	if err != nil {
-		panic(err)
+		log.Fatalf("Scan row error: %v", err)
+		return &pagination
+	}
+
+	if reflect.ValueOf(result).Kind() != reflect.Ptr {
+		panic("Result of PagingFunc must be a pointer")
 	}
 
 	<-done

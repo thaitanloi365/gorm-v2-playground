@@ -8,6 +8,11 @@ import (
 	jsoniter "github.com/json-iterator/go"
 )
 
+// JSON struct
+type JSON struct {
+	Alias JSONRaw
+}
+
 //JSONRaw ...
 type JSONRaw jsoniter.RawMessage
 
@@ -33,4 +38,12 @@ func (j *JSONRaw) Scan(src interface{}) error {
 	*j = source
 
 	return nil
+}
+
+// Unmarshal json
+func (j JSONRaw) Unmarshal(dest interface{}) (err error) {
+	if len(j) > 0 {
+		err = jsoniter.Unmarshal(j, dest)
+	}
+	return
 }
